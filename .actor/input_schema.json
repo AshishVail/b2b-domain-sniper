@@ -1,0 +1,67 @@
+
+{
+  "title": "B2B Domain Sniper Input",
+  "description": "Enter company domains to extract public business intelligence, contact information, technology signals, hiring activity, and buying-intent scores.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "domains": {
+      "title": "Company Domains",
+      "type": "array",
+      "description": "Enter company domains or website URLs. Maximum 500 entries per run.",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "max_pages_per_domain": {
+      "title": "Maximum Pages Per Domain",
+      "type": "integer",
+      "default": 6,
+      "minimum": 1,
+      "maximum": 8
+    },
+    "max_concurrency": {
+      "title": "Concurrent Domains",
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 50
+    },
+    "extract_emails": {
+      "title": "Extract Business Emails",
+      "type": "boolean",
+      "default": true
+    },
+    "extract_phones": {
+      "title": "Extract Phone Numbers",
+      "type": "boolean",
+      "default": true
+    },
+    "detect_technologies": {
+      "title": "Detect Website Technologies",
+      "type": "boolean",
+      "default": true
+    },
+    "detect_hiring_signals": {
+      "title": "Detect Hiring Signals",
+      "type": "boolean",
+      "default": true
+    },
+    "generate_business_summary": {
+      "title": "Generate Business Summary",
+      "type": "boolean",
+      "default": true
+    },
+    "calculate_intent_score": {
+      "title": "Calculate Buying Intent Score",
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "domains"
+  ]
+}
