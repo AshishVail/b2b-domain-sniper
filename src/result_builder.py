@@ -1,4 +1,3 @@
-
 """
 b2b-domain-sniper
 File: src/result_builder.py
@@ -256,16 +255,25 @@ def build_intent_section(
 
 
 def build_result(
-    data: dict[str, Any],
+    domain_or_data: Any,
+    domain_data: Any = None,
+    config: Any = None,
 ) -> dict[str, Any]:
     """
     Build the final standardized API response.
-
-    Missing optional modules receive safe defaults.
+    Supports both single-argument (data dict) and multi-argument calls.
     """
-
-    if not isinstance(data, dict):
-        raise TypeError("Result input must be a dictionary")
+    # अगर main.py से 3 आर्ग्यूमेंट आए हैं, तो उन्हें मिलाकर एक डेटा डिक्शनरी बना लो
+    if domain_data is not None:
+        if isinstance(domain_data, dict):
+            data = dict(domain_data)
+        else:
+            data = {}
+        data["domain"] = domain_or_data
+    else:
+        if not isinstance(domain_or_data, dict):
+            raise TypeError("Result input must be a dictionary or valid data")
+        data = domain_or_data
 
     errors = safe_list(
         data.get("errors")
