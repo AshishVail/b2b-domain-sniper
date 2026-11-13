@@ -1,20 +1,7 @@
+
 """
-b2b-domain-sniper
-File: src/result_builder.py
-
+B2B Domain Sniper
 Final Business Intelligence Result Builder.
-
-Features:
-- Structured JSON output
-- Module result aggregation
-- Business information
-- Email intelligence
-- DNS validation
-- Technology intelligence
-- Hiring intelligence
-- Intent scoring
-- Scan metadata
-- Error reporting
 """
 
 from __future__ import annotations
@@ -25,52 +12,30 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-OUTPUT_VERSION = "1.0"
+OUTPUT_VERSION = "1.1"
 
 
 def utc_now() -> str:
-    """Return current UTC timestamp."""
-
-    return datetime.now(
-        timezone.utc
-    ).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
-def safe_dict(
-    value: Any,
-) -> dict[str, Any]:
-    """Return dictionary or an empty dictionary."""
-
-    if isinstance(value, dict):
-        return value
-
-    return {}
+def safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def safe_list(
-    value: Any,
-) -> list[Any]:
-    """Return list or an empty list."""
-
-    if isinstance(value, list):
-        return value
-
-    return []
+def safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
-def build_business_info(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build business identity section."""
+def build_business_info(data: dict) -> dict:
+    """Build business identity."""
 
-    business = safe_dict(
-        data.get("business")
-    )
+    business = safe_dict(data.get("business"))
 
     return {
         "name": business.get("name"),
-        "domain": business.get("domain"),
-        "website": business.get("website"),
+        "domain": business.get("domain") or data.get("domain"),
+        "website": business.get("website") or data.get("website_url"),
         "description": business.get("description"),
         "industry": business.get("industry"),
         "location": business.get("location"),
@@ -78,14 +43,10 @@ def build_business_info(
     }
 
 
-def build_email_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build email intelligence section."""
+def build_email_section(data: dict) -> dict:
+    """Build email intelligence."""
 
-    emails = safe_list(
-        data.get("emails")
-    )
+    emails = safe_list(data.get("emails"))
 
     unique_emails = []
     seen = set()
@@ -93,28 +54,28 @@ def build_email_section(
     for item in emails:
 
         if isinstance(item, str):
-            email = item.strip().lower()
             details = {
-                "email": email,
+                "email": item,
                 "type": "unknown",
             }
 
         elif isinstance(item, dict):
             details = dict(item)
 
-            email = str(
-                details.get("email") or ""
-            ).strip().lower()
-
-            details["email"] = email
-
         else:
             continue
+
+        email = str(
+            details.get("email") or ""
+        ).strip().lower()
 
         if not email or email in seen:
             continue
 
         seen.add(email)
+
+        details["email"] = email
+
         unique_emails.append(details)
 
     return {
@@ -123,75 +84,88 @@ def build_email_section(
     }
 
 
-def build_website_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
+def build_website_section(data: dict) -> dict:
     """Build website crawl information."""
 
-    website = safe_dict(
-        data.get("website")
+    website = safe_dict(data.get("website"))
+
+    # Support both nested and original crawler output
+    pages = safe_list(
+        website.get("pages", data.get("pages"))
     )
 
-    pages = safe_list(
-        website.get("pages")
-    )
+    homepage = pages[0] if pages else {}
 
     return {
-        "url": website.get("url"),
-        "reachable": website.get("reachable"),
-        "status_code": website.get("status_code"),
+        "url": (
+            website.get("url")
+            or data.get("website_url")
+        ),
+        "reachable": website.get(
+            "reachable",
+            bool(homepage.get("html")),
+        ),
+        "status_code": website.get(
+            "status_code",
+            homepage.get("status_code"),
+        ),
         "pages_analyzed": website.get(
             "pages_analyzed",
-            len(pages),
+            data.get("page_count", len(pages)),
         ),
         "pages": pages,
     }
 
 
-def build_mx_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build MX validation section."""
+def build_mx_section(data: dict) -> dict:
+    """Build email server validation."""
 
     return safe_dict(
-        data.get("mx_validation", data.get("mx"))
+        data.get(
+            "mx_validation",
+            data.get("mx"),
+        )
     )
 
 
-def build_technology_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build technology intelligence section."""
+def build_technology_section(data: dict) -> dict:
+    """Build technology detection results."""
 
     technology = safe_dict(
-        data.get("technology")
+        data.get(
+            "technology",
+            data.get("technologies"),
+        )
+    )
+
+    technologies = safe_list(
+        technology.get("technologies")
     )
 
     return {
         "technology_count": technology.get(
             "technology_count",
-            len(technology.get("technologies", [])),
+            len(technologies),
         ),
-        "technologies": safe_list(
-            technology.get("technologies")
-        ),
+        "technologies": technologies,
         "categories": safe_dict(
             technology.get("categories")
         ),
+        "pages_analyzed": technology.get(
+            "pages_analyzed",
+            0,
+        ),
         "detection_status": technology.get(
-            "detection_status"
+            "detection_status",
+            "not_available",
         ),
     }
 
 
-def build_hiring_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build hiring intelligence section."""
+def build_hiring_section(data: dict) -> dict:
+    """Build hiring intelligence."""
 
-    hiring = safe_dict(
-        data.get("hiring")
-    )
+    hiring = safe_dict(data.get("hiring"))
 
     return {
         "hiring_detected": hiring.get(
@@ -215,6 +189,10 @@ def build_hiring_section(
         "job_board_links": safe_list(
             hiring.get("job_board_links")
         ),
+        "pages_analyzed": hiring.get(
+            "pages_analyzed",
+            0,
+        ),
         "verification": hiring.get(
             "verification",
             "public_website_signals_only",
@@ -222,14 +200,10 @@ def build_hiring_section(
     }
 
 
-def build_intent_section(
-    data: dict[str, Any],
-) -> dict[str, Any]:
-    """Build business intent scoring section."""
+def build_intent_section(data: dict) -> dict:
+    """Build business intent score."""
 
-    intent = safe_dict(
-        data.get("intent")
-    )
+    intent = safe_dict(data.get("intent"))
 
     return {
         "intent_score": intent.get(
@@ -251,6 +225,9 @@ def build_intent_section(
             "signals_analyzed",
             0,
         ),
+        "available_signals": safe_list(
+            intent.get("available_signals")
+        ),
     }
 
 
@@ -260,27 +237,49 @@ def build_result(
     config: Any = None,
 ) -> dict[str, Any]:
     """
-    Build the final standardized API response.
-    Supports both single-argument (data dict) and multi-argument calls.
-    """
-    # अगर main.py से 3 आर्ग्यूमेंट आए हैं, तो उन्हें मिलाकर एक डेटा डिक्शनरी बना लो
-    if domain_data is not None:
-        if isinstance(domain_data, dict):
-            data = dict(domain_data)
-        else:
-            data = {}
-        data["domain"] = domain_or_data
-    else:
-        if not isinstance(domain_or_data, dict):
-            raise TypeError("Result input must be a dictionary or valid data")
-        data = domain_or_data
+    Build final standardized JSON.
 
-    errors = safe_list(
-        data.get("errors")
+    Supports:
+    build_result(data)
+    build_result(domain, data, config)
+    """
+
+    if domain_data is not None:
+
+        if not isinstance(domain_data, dict):
+            raise TypeError(
+                "domain_data must be a dictionary."
+            )
+
+        data = dict(domain_data)
+
+        data["domain"] = (
+            data.get("domain")
+            or domain_or_data
+        )
+
+    else:
+
+        if not isinstance(domain_or_data, dict):
+            raise TypeError(
+                "Input must be a dictionary."
+            )
+
+        data = dict(domain_or_data)
+
+    errors = safe_list(data.get("errors"))
+
+    status = data.get(
+        "status",
+        "completed",
     )
 
+    # Partial page errors do not automatically mean
+    # the complete domain scan failed.
+    success = status == "completed"
+
     result = {
-        "success": not bool(errors),
+        "success": success,
 
         "api": {
             "name": "b2b-domain-sniper",
@@ -294,10 +293,7 @@ def build_result(
                 utc_now(),
             ),
             "domain": data.get("domain"),
-            "status": data.get(
-                "status",
-                "completed",
-            ),
+            "status": status,
         },
 
         "business": build_business_info(data),
@@ -308,9 +304,13 @@ def build_result(
 
         "mx_validation": build_mx_section(data),
 
-        "technology_intelligence": build_technology_section(data),
+        "technology_intelligence": (
+            build_technology_section(data)
+        ),
 
-        "hiring_intelligence": build_hiring_section(data),
+        "hiring_intelligence": (
+            build_hiring_section(data)
+        ),
 
         "business_intelligence": {
             "intent": build_intent_section(data),
@@ -340,7 +340,7 @@ def build_json_result(
     data: dict[str, Any],
     pretty: bool = False,
 ) -> str:
-    """Build and serialize final JSON response."""
+    """Build and serialize final JSON."""
 
     result = build_result(data)
 
