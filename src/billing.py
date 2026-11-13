@@ -1,4 +1,3 @@
-
 """
 b2b-domain-sniper
 File: src/billing.py
