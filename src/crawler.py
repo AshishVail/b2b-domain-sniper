@@ -1,7 +1,7 @@
 
 """
 B2B Domain Sniper
-Controlled same-site website crawler.
+Website crawler with internal page discovery.
 """
 
 import asyncio
@@ -33,29 +33,33 @@ IGNORED_EXTENSIONS = (
 )
 
 SKIPPED_TAGS = {
-    "script", "style", "noscript", "svg",
-    "template", "iframe",
+    "script", "style", "noscript",
+    "svg", "template", "iframe",
 }
 
 
 class PageParser(HTMLParser):
-    """Extract page title, visible text and links from HTML."""
+    """Extract visible text, title, metadata and links."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(convert_charrefs=True)
 
-        self.title_parts: list[str] = []
-        self.text_parts: list[str] = []
-        self.links: list[dict[str, str]] = []
+        self.title_parts = []
+        self.text_parts = []
+        self.links = []
 
         self.in_title = False
         self.skip_depth = 0
 
-        self.current_href: str | None = None
-        self.current_link_text: list[str] = []
+        self.current_href = None
+        self.current_link_text = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.description = None
+        self.phone_numbers = []
+
+    def handle_starttag(self, tag, attrs):
         tag = tag.lower()
+        attributes = dict(attrs)
 
         if tag in SKIPPED_TAGS:
             self.skip_depth += 1
@@ -67,19 +71,36 @@ class PageParser(HTMLParser):
         if tag == "title":
             self.in_title = True
 
+        elif tag == "meta":
+            name = (
+                attributes.get("name")
+                or attributes.get("property")
+                or ""
+            ).lower()
+
+            if name in {
+                "description",
+                "og:description",
+            }:
+                self.description = (
+                    attributes.get("content") or ""
+                ).strip() or self.description
+
         elif tag == "a":
-            attributes = dict(attrs)
             href = attributes.get("href")
 
             if href:
                 self.current_href = href.strip()
                 self.current_link_text = []
 
-    def handle_endtag(self, tag: str) -> None:
+    def handle_endtag(self, tag):
         tag = tag.lower()
 
         if tag in SKIPPED_TAGS:
-            self.skip_depth = max(0, self.skip_depth - 1)
+            self.skip_depth = max(
+                0,
+                self.skip_depth - 1,
+            )
             return
 
         if self.skip_depth:
@@ -91,13 +112,15 @@ class PageParser(HTMLParser):
         elif tag == "a" and self.current_href:
             self.links.append({
                 "href": self.current_href,
-                "text": " ".join(self.current_link_text).strip(),
+                "text": " ".join(
+                    self.current_link_text
+                ).strip(),
             })
 
             self.current_href = None
             self.current_link_text = []
 
-    def handle_data(self, data: str) -> None:
+    def handle_data(self, data):
         if self.skip_depth:
             return
 
@@ -114,21 +137,24 @@ class PageParser(HTMLParser):
         if self.current_href:
             self.current_link_text.append(value)
 
-    def get_result(self) -> dict[str, Any]:
+    def get_result(self):
         return {
-            "title": " ".join(self.title_parts).strip(),
+            "title": " ".join(
+                self.title_parts
+            ).strip(),
+            "description": self.description,
             "text": " ".join(self.text_parts),
-            "links": self.links[:200],
+            "links": self.links[:300],
         }
 
 
-def parse_html(html: str) -> dict[str, Any]:
-    """Parse HTML into a lightweight structured representation."""
+def parse_html(html):
+    """Convert HTML into structured page data."""
 
     parser = PageParser()
 
     try:
-        parser.feed(html)
+        parser.feed(html or "")
         parser.close()
     except Exception:
         pass
@@ -136,14 +162,15 @@ def parse_html(html: str) -> dict[str, Any]:
     return parser.get_result()
 
 
-def _normalize_internal_link(
-    base_url: str,
-    href: str,
-) -> str | None:
-    """Resolve and normalize a link belonging to the same hostname."""
+def _normalize_internal_link(base_url, href):
+    """Return normalized same-site HTTP links only."""
 
     try:
-        absolute_url = urljoin(base_url, href.strip())
+        absolute_url = urljoin(
+            base_url,
+            href.strip(),
+        )
+
         parsed = urlsplit(absolute_url)
         base = urlsplit(base_url)
 
@@ -168,7 +195,7 @@ def _normalize_internal_link(
             parsed.scheme,
             parsed.netloc,
             path,
-            "",
+            parsed.query,
             "",
         ))
 
@@ -177,33 +204,40 @@ def _normalize_internal_link(
 
 
 def discover_internal_pages(
-    base_url: str,
-    links: list[dict[str, str]],
-    max_pages: int,
-) -> list[str]:
-    """
-    Select high-value internal pages.
+    base_url,
+    links,
+    max_pages,
+):
+    """Prioritize useful company website pages."""
 
-    Priority:
-    Contact -> About -> Careers -> Pricing -> Services -> Others
-    """
-
-    candidates: list[tuple[int, str]] = []
-    seen: set[str] = {base_url}
+    candidates = []
+    seen = {base_url}
 
     for link in links:
+        if not isinstance(link, dict):
+            continue
+
         href = link.get("href", "")
         text = link.get("text", "").lower()
 
-        normalized_url = _normalize_internal_link(base_url, href)
+        normalized_url = _normalize_internal_link(
+            base_url,
+            href,
+        )
 
-        if not normalized_url or normalized_url in seen:
+        if not normalized_url:
+            continue
+
+        if normalized_url in seen:
             continue
 
         seen.add(normalized_url)
 
         parsed = urlsplit(normalized_url)
-        searchable = f"{parsed.path} {text}".lower()
+
+        searchable = (
+            f"{parsed.path} {text}"
+        ).lower()
 
         priority = 99
 
@@ -211,9 +245,17 @@ def discover_internal_pages(
             if keyword in searchable:
                 priority = min(priority, rank)
 
-        candidates.append((priority, normalized_url))
+        candidates.append((
+            priority,
+            normalized_url,
+        ))
 
-    candidates.sort(key=lambda item: (item[0], item[1]))
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        )
+    )
 
     return [
         url
@@ -222,25 +264,35 @@ def discover_internal_pages(
 
 
 async def _fetch_and_parse(
-    client: Any,
-    url: str,
-    config: RuntimeConfig,
-) -> dict[str, Any]:
-    """Fetch a page and attach its extracted content."""
+    client,
+    url,
+    config,
+):
+    """Fetch and parse one website page."""
 
-    page = await fetch_page(client, url, config)
+    page = await fetch_page(
+        client,
+        url,
+        config,
+    )
 
-    html = page.get("html", "")
+    html = page.get("html") or ""
 
     if html:
-        parsed_content = parse_html(html)
-        page.update(parsed_content)
+        parsed = parse_html(html)
+        page.update(parsed)
     else:
         page.update({
             "title": "",
+            "description": None,
             "text": "",
             "links": [],
         })
+
+    page.setdefault("headers", {})
+    page.setdefault("html", "")
+    page.setdefault("status_code", None)
+    page.setdefault("error", None)
 
     return page
 
@@ -249,19 +301,18 @@ async def process_domain(
     domain: str,
     config: RuntimeConfig,
 ) -> dict[str, Any]:
-    """
-    Crawl one company website.
+    """Crawl homepage and important internal pages."""
 
-    The homepage is fetched first. Important same-site links
-    are then selected and fetched within the configured page limit.
-    """
+    errors = []
+    pages = []
 
-    errors: list[dict[str, str]] = []
-    pages: list[dict[str, Any]] = []
+    parsed_domain = urlsplit(domain)
+
+    hostname = parsed_domain.hostname
 
     async with create_http_client(config) as client:
 
-        # Step 1: Fetch homepage.
+        # Homepage
         homepage = await _fetch_and_parse(
             client,
             domain,
@@ -272,7 +323,7 @@ async def process_domain(
 
         if homepage.get("error"):
             errors.append({
-                "url": homepage["url"],
+                "url": homepage.get("url", domain),
                 "error": homepage["error"],
             })
 
@@ -280,14 +331,14 @@ async def process_domain(
 
         if not homepage_html:
             return {
-                "domain": urlsplit(domain).hostname,
+                "domain": hostname,
                 "website_url": domain,
                 "pages": pages,
-                "page_count": 1,
+                "page_count": len(pages),
                 "errors": errors,
             }
 
-        # Step 2: Discover important internal pages.
+        # Discover internal pages
         base_url = homepage.get("url") or domain
 
         remaining_pages = max(
@@ -301,10 +352,10 @@ async def process_domain(
             remaining_pages,
         )
 
-        # Step 3: Fetch selected pages with bounded concurrency.
+        # Fetch internal pages
         page_semaphore = asyncio.Semaphore(3)
 
-        async def fetch_limited(url: str) -> dict[str, Any]:
+        async def fetch_limited(url):
             async with page_semaphore:
                 return await _fetch_and_parse(
                     client,
@@ -313,7 +364,8 @@ async def process_domain(
                 )
 
         if candidate_urls:
-            additional_pages = await asyncio.gather(
+
+            results = await asyncio.gather(
                 *[
                     fetch_limited(url)
                     for url in candidate_urls
@@ -321,7 +373,7 @@ async def process_domain(
                 return_exceptions=True,
             )
 
-            for index, result in enumerate(additional_pages):
+            for index, result in enumerate(results):
 
                 if isinstance(result, Exception):
                     errors.append({
@@ -334,12 +386,15 @@ async def process_domain(
 
                 if result.get("error"):
                     errors.append({
-                        "url": result["url"],
+                        "url": result.get(
+                            "url",
+                            candidate_urls[index],
+                        ),
                         "error": result["error"],
                     })
 
     return {
-        "domain": urlsplit(domain).hostname,
+        "domain": hostname,
         "website_url": domain,
         "pages": pages,
         "page_count": len(pages),
