@@ -1,24 +1,27 @@
 
 {
   "title": "B2B Domain Sniper Input",
-  "description": "Enter company domains to extract public business intelligence, contact information, technology signals, hiring activity, and buying-intent scores.",
+  "description": "Enter company domains to extract public business intelligence, contact information, website technology signals, hiring activity, and lead intent scores.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "domains": {
       "title": "Company Domains",
       "type": "array",
-      "description": "Enter company domains or website URLs. Maximum 500 entries per run.",
+      "description": "Enter company domains or website URLs. Maximum 500 unique entries per run.",
       "editor": "stringList",
       "items": {
         "type": "string"
       },
       "minItems": 1,
-      "maxItems": 500
+      "maxItems": 500,
+      "uniqueItems": true
     },
     "max_pages_per_domain": {
       "title": "Maximum Pages Per Domain",
       "type": "integer",
+      "description": "Maximum number of website pages to crawl for each domain.",
+      "editor": "number",
       "default": 6,
       "minimum": 1,
       "maximum": 8
@@ -26,6 +29,8 @@
     "max_concurrency": {
       "title": "Concurrent Domains",
       "type": "integer",
+      "description": "Maximum number of domains processed concurrently.",
+      "editor": "number",
       "default": 20,
       "minimum": 1,
       "maximum": 50
@@ -33,35 +38,48 @@
     "extract_emails": {
       "title": "Extract Business Emails",
       "type": "boolean",
+      "description": "Extract publicly visible business email addresses.",
+      "editor": "checkbox",
       "default": true
     },
     "extract_phones": {
       "title": "Extract Phone Numbers",
       "type": "boolean",
+      "description": "Extract publicly visible business phone numbers.",
+      "editor": "checkbox",
       "default": true
     },
     "detect_technologies": {
       "title": "Detect Website Technologies",
       "type": "boolean",
+      "description": "Identify website platforms, frameworks, analytics tools, and other technology signals.",
+      "editor": "checkbox",
       "default": true
     },
     "detect_hiring_signals": {
       "title": "Detect Hiring Signals",
       "type": "boolean",
+      "description": "Identify public careers pages, job board links, and hiring-related signals.",
+      "editor": "checkbox",
       "default": true
     },
     "generate_business_summary": {
       "title": "Generate Business Summary",
       "type": "boolean",
+      "description": "Generate a summary using publicly available website content.",
+      "editor": "checkbox",
       "default": true
     },
     "calculate_intent_score": {
       "title": "Calculate Buying Intent Score",
       "type": "boolean",
+      "description": "Calculate a heuristic lead signal score from available website intelligence.",
+      "editor": "checkbox",
       "default": true
     }
   },
   "required": [
     "domains"
-  ]
+  ],
+  "additionalProperties": false
 }
