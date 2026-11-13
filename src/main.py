@@ -1,4 +1,3 @@
-
 """
 B2B Domain Sniper
 Main application orchestrator.
@@ -21,7 +20,6 @@ from .config import load_config
 from .models import validate_input
 from .crawler import process_domain
 from .result_builder import build_result
-from .billing import charge_and_push_result
 
 
 async def process_single_domain(
@@ -47,8 +45,8 @@ async def process_single_domain(
             # Convert collected information into the standard output.
             result = build_result(domain, domain_data, config)
 
-            # Handle billing and Dataset submission in one layer.
-            await charge_and_push_result(result)
+            # Push result directly to Apify dataset.
+            await Actor.push_data(result)
 
             Actor.log.info("Successfully processed: %s", domain)
             return True
@@ -133,4 +131,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-                           
