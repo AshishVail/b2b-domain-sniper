@@ -1,9 +1,9 @@
 
 {
   "actorSpecification": 1,
-  "name": "coreapi-b2b-domain-sniper",
-  "title": "CoreAPI B2B Domain Sniper",
-  "description": "Extract public business contact information, detect website technologies, identify hiring signals, and generate explainable B2B buying-intent intelligence from company domains.",
+  "name": "b2b-domain-sniper",
+  "title": "B2B Domain Sniper",
+  "description": "Extract public business emails, phone numbers, website technologies, hiring signals, and explainable B2B buying-intent intelligence from company domains.",
   "version": "0.1",
   "buildTag": "latest",
   "dockerfile": "./Dockerfile",
