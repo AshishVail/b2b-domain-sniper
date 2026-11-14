@@ -6,7 +6,6 @@ Final Business Intelligence Result Builder.
 from __future__ import annotations
 
 import json
-
 from datetime import datetime, timezone
 from typing import Any
 
@@ -137,9 +136,7 @@ def build_email_section(data: dict) -> dict:
             continue
 
         seen.add(email)
-
         details["email"] = email
-
         unique_emails.append(details)
 
     return {
@@ -272,24 +269,40 @@ def build_location_section(data: dict) -> dict:
 
     summary = safe_dict(location_summary)
 
-    # Support a location object returned directly by the extractor.
+    # The extractor's primary_location is itself a structured address record.
+    primary = summary.get("primary_location")
+    primary_record = safe_dict(primary)
+
     if not summary and isinstance(location_summary, str):
         summary = {
-            "primary_location": location_summary,
+            "primary_location": location_summary
         }
 
     return {
         "primary_location": (
-            summary.get("primary_location")
+            primary
             or summary.get("location")
             or summary.get("formatted_address")
         ),
         "locations": safe_list(locations),
         "total": len(safe_list(locations)),
-        "country": summary.get("country"),
-        "city": summary.get("city"),
-        "region": summary.get("region"),
-        "postal_code": summary.get("postal_code"),
+        "country": (
+            summary.get("country")
+            or primary_record.get("country")
+        ),
+        "city": (
+            summary.get("city")
+            or primary_record.get("city")
+        ),
+        "region": (
+            summary.get("region")
+            or primary_record.get("state")
+            or primary_record.get("region")
+        ),
+        "postal_code": (
+            summary.get("postal_code")
+            or primary_record.get("postal_code")
+        ),
         "detection_status": summary.get(
             "detection_status",
             "completed" if locations or summary else "not_detected",
@@ -329,11 +342,26 @@ def build_website_section(data: dict) -> dict:
 
     homepage = pages[0] if pages else {}
 
+    # Raw HTML is used internally for extraction only. It must not be copied
+    # into the public dataset because it makes each record unnecessarily large.
+    public_pages = []
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+
+        public_pages.append({
+            "url": page.get("url"),
+            "status_code": page.get("status_code"),
+            "title": page.get("title"),
+            "description": page.get("description"),
+            "text": str(page.get("text") or "")[:8000],
+            "content_type": page.get("content_type"),
+            "error": page.get("error"),
+        })
+
     return {
-        "url": (
-            website.get("url")
-            or data.get("website_url")
-        ),
+        "url": website.get("url") or data.get("website_url"),
         "reachable": website.get(
             "reachable",
             bool(homepage.get("html")),
@@ -346,7 +374,7 @@ def build_website_section(data: dict) -> dict:
             "pages_analyzed",
             data.get("page_count", len(pages)),
         ),
-        "pages": pages,
+        "pages": public_pages,
     }
 
 
@@ -465,52 +493,67 @@ def build_intent_section(data: dict) -> dict:
 
 
 def build_result(
-    domain_or_data: Any,
+    domain_or_data: Any = None,
     domain_data: Any = None,
     config: Any = None,
+    *,
+    domain: str | None = None,
+    errors: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Build final standardized JSON.
+    """Build the stable public result schema.
 
-    Supports:
-    build_result(data)
-    build_result(domain, data, config)
+    Supported call forms:
+      build_result(data)
+      build_result(domain, data, config)
+      build_result(domain="example.com")
+      build_result(domain="example.com", errors=[...])
     """
+
+    if domain is not None:
+        if domain_or_data is not None:
+            raise TypeError(
+                "Pass either domain or domain_or_data, not both."
+            )
+
+        domain_or_data = domain
 
     if domain_data is not None:
-
         if not isinstance(domain_data, dict):
             raise TypeError(
                 "domain_data must be a dictionary."
             )
 
         data = dict(domain_data)
+        data["domain"] = data.get("domain") or domain_or_data
 
-        data["domain"] = (
-            data.get("domain")
-            or domain_or_data
-        )
-
-    else:
-
-        if not isinstance(domain_or_data, dict):
-            raise TypeError(
-                "Input must be a dictionary."
-            )
-
+    elif isinstance(domain_or_data, dict):
         data = dict(domain_or_data)
 
-    errors = safe_list(data.get("errors"))
+    elif isinstance(domain_or_data, str):
+        data = {
+            "domain": domain_or_data
+        }
 
-    status = data.get(
-        "status",
-        "completed",
-    )
+    elif domain_or_data is None:
+        data = {}
 
-    success = status == "completed"
+    else:
+        raise TypeError(
+            "Input must be a dictionary or domain string."
+        )
+
+    if errors is not None:
+        data["errors"] = list(errors)
+
+    status = str(
+        data.get("status") or "failed"
+    ).lower()
+
+    if status not in {"completed", "failed", "partial"}:
+        status = "failed"
 
     result = {
-        "success": success,
+        "success": status == "completed",
 
         "api": {
             "name": "b2b-domain-sniper",
@@ -519,10 +562,7 @@ def build_result(
 
         "scan": {
             "scan_id": data.get("scan_id"),
-            "timestamp": data.get(
-                "timestamp",
-                utc_now(),
-            ),
+            "timestamp": data.get("timestamp") or utc_now(),
             "domain": data.get("domain"),
             "status": status,
         },
@@ -537,13 +577,9 @@ def build_result(
 
         "mx_validation": build_mx_section(data),
 
-        "technology_intelligence": (
-            build_technology_section(data)
-        ),
+        "technology_intelligence": build_technology_section(data),
 
-        "hiring_intelligence": (
-            build_hiring_section(data)
-        ),
+        "hiring_intelligence": build_hiring_section(data),
 
         "business_intelligence": {
             "industry": build_industry_section(data),
@@ -552,7 +588,7 @@ def build_result(
             "intent": build_intent_section(data),
         },
 
-        "errors": errors,
+        "errors": safe_list(data.get("errors")),
     }
 
     return result
@@ -573,12 +609,13 @@ def serialize_result(
 
 
 def build_json_result(
-    data: dict[str, Any],
+    data: dict[str, Any] | None = None,
     pretty: bool = False,
+    **kwargs: Any,
 ) -> str:
-    """Build and serialize final JSON."""
+    """Build and serialize final JSON, including domain keyword compatibility."""
 
-    result = build_result(data)
+    result = build_result(data, **kwargs)
 
     return serialize_result(
         result,
