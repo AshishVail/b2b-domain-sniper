@@ -4,7 +4,9 @@ Main application orchestrator.
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from apify import Actor
 
@@ -81,7 +83,7 @@ async def process_single_domain(
         try:
             Actor.log.info("Processing: %s", domain)
 
-            # 1. Crawl website
+            # 1. Crawl website.
             domain_data = await process_domain(
                 domain,
                 config,
@@ -90,7 +92,7 @@ async def process_single_domain(
             pages = domain_data.get("pages", []) or []
             hostname = domain_data.get("domain") or domain
 
-            # 2. Extract emails
+            # 2. Extract emails.
             emails = []
 
             if getattr(config, "extract_emails", True):
@@ -103,7 +105,7 @@ async def process_single_domain(
                         str(exc),
                     )
 
-            # 3. Extract phone numbers
+            # 3. Extract phone numbers.
             phone_numbers = []
 
             if getattr(config, "extract_phones", True):
@@ -119,7 +121,7 @@ async def process_single_domain(
                         str(exc),
                     )
 
-            # 4. Detect industry
+            # 4. Detect industry.
             industry_data = {
                 "primary_industry": None,
                 "confidence": 0,
@@ -139,7 +141,7 @@ async def process_single_domain(
                     str(exc),
                 )
 
-            # 5. Extract business location
+            # 5. Extract business location.
             locations = []
             location_data = {}
 
@@ -160,7 +162,7 @@ async def process_single_domain(
                     str(exc),
                 )
 
-            # 6. Detect technologies
+            # 6. Detect technologies.
             if getattr(config, "detect_technologies", True):
                 try:
                     technology = detect_technology_from_pages(
@@ -177,7 +179,7 @@ async def process_single_domain(
             else:
                 technology = _disabled_technology_result()
 
-            # 7. Detect hiring signals
+            # 7. Detect hiring signals.
             if getattr(config, "detect_hiring_signals", True):
                 try:
                     hiring = detect_hiring_from_pages(
@@ -194,7 +196,7 @@ async def process_single_domain(
             else:
                 hiring = _disabled_hiring_result()
 
-            # 8. Validate MX records
+            # 8. Validate MX records.
             try:
                 mx_validation = await validate_mx(hostname)
 
@@ -213,7 +215,7 @@ async def process_single_domain(
                     "error": str(exc),
                 }
 
-            # 9. Website information
+            # 9. Website information.
             homepage = pages[0] if pages else {}
 
             website_url = domain_data.get(
@@ -221,20 +223,26 @@ async def process_single_domain(
                 domain,
             )
 
+            homepage_status = homepage.get("status_code")
+
+            homepage_reachable = bool(
+                homepage.get("html")
+                and isinstance(homepage_status, int)
+                and 200 <= homepage_status < 400
+            )
+
             website = {
                 "url": website_url,
-                "reachable": bool(homepage.get("html")),
-                "status_code": homepage.get("status_code"),
+                "reachable": homepage_reachable,
+                "status_code": homepage_status,
                 "pages_analyzed": len(pages),
                 "pages": pages,
             }
 
-            # 10. Generate business description
-            existing_description = (
-                homepage.get("description")
-                or homepage.get("text", "")[:500]
-                or None
-            )
+            # 10. Generate business description.
+            # Prefer an actual meta description. Do not label arbitrary
+            # homepage text as a verified business description.
+            existing_description = homepage.get("description") or None
 
             business_description = existing_description
 
@@ -256,9 +264,21 @@ async def process_single_domain(
                         str(exc),
                     )
 
-            # 11. Basic business information
+            # 11. Basic business information.
+            metadata = homepage.get("metadata") or {}
+
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            business_name = (
+                metadata.get("og:site_name")
+                or metadata.get("application-name")
+                or homepage.get("title")
+                or hostname
+            )
+
             business = {
-                "name": homepage.get("title") or hostname,
+                "name": business_name,
                 "domain": hostname,
                 "website": website_url,
                 "description": business_description,
@@ -269,10 +289,20 @@ async def process_single_domain(
                 "phone_numbers": phone_numbers,
             }
 
-            # 12. Unified result data
+            # 12. Unified result data.
+            crawl_errors = list(
+                domain_data.get("errors", []) or []
+            )
+
             result_data = {
                 "domain": hostname,
-                "status": "completed" if pages else "failed",
+                "scan_id": str(uuid4()),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": (
+                    "failed" if not homepage_reachable
+                    else "partial" if crawl_errors
+                    else "completed"
+                ),
                 "business": business,
                 "website": website,
                 "emails": emails,
@@ -284,14 +314,14 @@ async def process_single_domain(
                 "mx_validation": mx_validation,
                 "technology": technology,
                 "hiring": hiring,
-                "errors": domain_data.get("errors", []) or [],
+                "errors": crawl_errors,
             }
 
-            # 13. Calculate intent score
+            # 13. Calculate intent score.
             if getattr(config, "calculate_intent_score", True):
                 intent_data = dict(result_data)
 
-                # Intent scorer expects email strings
+                # Intent scorer expects email strings.
                 intent_data["emails"] = [
                     item["email"]
                     for item in emails
@@ -303,6 +333,12 @@ async def process_single_domain(
                     result_data["intent"] = calculate_intent(
                         intent_data
                     )
+
+                    result_data["intent"]["method"] = "heuristic"
+                    result_data["intent"][
+                        "not_a_purchase_prediction"
+                    ] = True
+
                 except Exception as exc:
                     Actor.log.warning(
                         "Intent scoring failed for %s: %s",
@@ -316,14 +352,14 @@ async def process_single_domain(
                         "error": str(exc),
                     }
 
-            # 14. Build final JSON
+            # 14. Build final JSON.
             result = build_result(
                 domain,
                 result_data,
                 config,
             )
 
-            # 15. Save to Apify Dataset
+            # 15. Save to Apify Dataset.
             await Actor.push_data(result)
 
             Actor.log.info(
@@ -361,9 +397,7 @@ async def run_application() -> None:
         )
 
     validated_input = validate_input(raw_input)
-
     config = load_config(validated_input)
-
     domains = validated_input.domains
 
     if not domains:
