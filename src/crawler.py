@@ -63,6 +63,7 @@ class PageParser(HTMLParser):
 
         self.description = None
         self.base_href = None
+        self.metadata = {}
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -85,15 +86,16 @@ class PageParser(HTMLParser):
                 or ""
             ).lower()
 
+            content = (attributes.get("content") or "").strip()
+
+            if name and content:
+                self.metadata[name] = content
+
             if name in {
                 "description",
                 "og:description",
                 "twitter:description",
             }:
-                content = (
-                    attributes.get("content") or ""
-                ).strip()
-
                 if content and not self.description:
                     self.description = content
 
@@ -163,6 +165,7 @@ class PageParser(HTMLParser):
             "text": " ".join(self.text_parts),
             "links": self.links[:500],
             "base_href": self.base_href,
+            "metadata": self.metadata,
         }
 
 
@@ -194,13 +197,19 @@ def _normalize_start_url(domain: str) -> str:
     parsed = urlsplit(value)
 
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("Only HTTP and HTTPS URLs are supported.")
+        raise ValueError(
+            "Only HTTP and HTTPS URLs are supported."
+        )
 
     if not parsed.hostname:
-        raise ValueError("Invalid domain or website URL.")
+        raise ValueError(
+            "Invalid domain or website URL."
+        )
 
     if parsed.username or parsed.password:
-        raise ValueError("URLs containing credentials are not supported.")
+        raise ValueError(
+            "URLs containing credentials are not supported."
+        )
 
     return urlunsplit((
         parsed.scheme.lower(),
@@ -215,7 +224,12 @@ def _get_hostname(url: str) -> str | None:
     """Safely extract a normalized hostname from a URL."""
 
     try:
-        return (urlsplit(url).hostname or "").lower().rstrip(".") or None
+        return (
+            (urlsplit(url).hostname or "")
+            .lower()
+            .rstrip(".")
+            or None
+        )
     except (ValueError, AttributeError):
         return None
 
@@ -241,8 +255,17 @@ def _normalize_internal_link(base_url, href):
         if parsed.username or parsed.password:
             return None
 
-        base_hostname = (base.hostname or "").lower().rstrip(".")
-        target_hostname = (parsed.hostname or "").lower().rstrip(".")
+        base_hostname = (
+            (base.hostname or "")
+            .lower()
+            .rstrip(".")
+        )
+
+        target_hostname = (
+            (parsed.hostname or "")
+            .lower()
+            .rstrip(".")
+        )
 
         if not base_hostname or target_hostname != base_hostname:
             return None
@@ -393,6 +416,7 @@ async def _fetch_and_parse(
             "text": "",
             "links": [],
             "base_href": None,
+            "metadata": {},
         })
 
     page.setdefault("url", url)
@@ -414,6 +438,7 @@ def _failed_page(url: str, error: Exception) -> dict:
         "description": None,
         "text": "",
         "links": [],
+        "metadata": {},
         "headers": {},
         "status_code": None,
         "error": str(error),
@@ -444,7 +469,7 @@ async def process_domain(
 
     async with create_http_client(config) as client:
 
-        # 1. Fetch homepage
+        # 1. Fetch homepage.
         try:
             homepage = await _fetch_and_parse(
                 client,
@@ -477,8 +502,7 @@ async def process_domain(
                 "errors": errors,
             }
 
-        # 2. Discover pages from homepage and then from
-        #    subsequently crawled internal pages.
+        # 2. Discover pages from homepage and later crawled pages.
         base_url = homepage.get("url") or start_url
 
         seen_urls = {
@@ -502,7 +526,6 @@ async def process_domain(
         while len(pages) < max_pages:
 
             remaining_pages = max_pages - len(pages)
-
             all_links = []
 
             for page in pages:
