@@ -1,4 +1,3 @@
-
 import pytest
 
 from src.email_extractor import (
@@ -98,6 +97,7 @@ class TestEmailClassification:
 
         assert result is not None
         assert isinstance(result, str)
+        assert result == "role_based"
 
     def test_extract_email_details_returns_collection(self):
         result = extract_email_details(
@@ -129,11 +129,47 @@ class TestContentCleaning:
 
         result = clean_html(html)
 
-        assert "Welcome" in result
-        assert "Business website" in result
-        assert "alert" not in result
+        assert isinstance(result, dict)
+        assert "Welcome" in result["text"]
+        assert "Business website" in result["text"]
+        assert "alert" not in result["text"]
 
     def test_clean_html_handles_empty_input(self):
         result = clean_html("")
 
-        assert isinstance(result, str)
+        assert isinstance(result, dict)
+        assert result["text"] == ""
+
+
+class TestPhoneExtraction:
+
+    def test_tel_link_is_extracted_and_deduplicated(self):
+        from src.phone_extractor import extract_phone_details
+
+        html = (
+            '<a href="tel:+1-212-555-1234">Call us</a>'
+            '<p>+1-212-555-1234</p>'
+        )
+
+        result = extract_phone_details(html=html)
+
+        assert len(result) == 1
+        assert result[0]["phone"] == "+1-212-555-1234"
+        assert result[0]["source_type"] == "tel_link"
+
+    def test_unlabelled_numbers_are_not_treated_as_phone_numbers(self):
+        from src.phone_extractor import extract_phones
+
+        text = (
+            "2025 2026 100 200 3000; "
+            "revenue 123 456 7890"
+        )
+
+        assert extract_phones(text=text) == []
+
+    def test_phone_label_allows_nationally_formatted_number(self):
+        from src.phone_extractor import extract_phones
+
+        assert "212-555-0198" in extract_phones(
+            text="Phone: 212-555-0198"
+        )
