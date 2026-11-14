@@ -1,4 +1,3 @@
-
 import json
 import pytest
 
@@ -89,3 +88,35 @@ class TestResultBuilder:
 
         assert isinstance(result, dict)
         assert result["errors"] == ["Test error"]
+
+    def test_public_website_pages_do_not_include_raw_html(self):
+        result = build_result({
+            "domain": "example.com",
+            "status": "completed",
+            "website": {
+                "url": "https://example.com",
+                "pages": [{
+                    "url": "https://example.com",
+                    "html": (
+                        "<html><body>"
+                        "private raw html payload"
+                        "</body></html>"
+                    ),
+                    "text": "Public text",
+                    "status_code": 200,
+                }],
+            },
+        })
+
+        page = result["website"]["pages"][0]
+
+        assert "html" not in page
+        assert page["text"] == "Public text"
+
+    def test_missing_status_does_not_claim_success(self):
+        result = build_result(
+            domain="example.com"
+        )
+
+        assert result["success"] is False
+        assert result["scan"]["status"] == "failed"
