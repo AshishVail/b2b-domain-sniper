@@ -1,4 +1,3 @@
-
 """
 B2B Domain Sniper
 Main application orchestrator.
@@ -12,12 +11,64 @@ from apify import Actor
 from .config import load_config
 from .models import validate_input
 from .crawler import process_domain
-from .email_extractor import extract_from_pages
-from .technology_detector import detect_from_pages
+from .email_extractor import extract_from_pages as extract_emails_from_pages
+from .phone_extractor import extract_from_pages as extract_phones_from_pages
+from .industry_detector import detect_industry_from_pages
+from .location_extractor import (
+    extract_from_pages as extract_locations_from_pages,
+    build_location_summary,
+)
+from .business_summary import generate_business_summary
+from .technology_detector import detect_from_pages as detect_technology_from_pages
 from .hiring_detector import detect_hiring_from_pages
 from .mx_validator import validate_mx
 from .intent_scorer import calculate_intent
 from .result_builder import build_result
+
+
+def _disabled_technology_result() -> dict:
+    return {
+        "technologies": [],
+        "technology_count": 0,
+        "categories": {},
+        "detection_status": "disabled",
+    }
+
+
+def _disabled_hiring_result() -> dict:
+    return {
+        "hiring_detected": False,
+        "hiring_score": 0,
+        "hiring_status": "disabled",
+        "matched_keywords": [],
+        "career_links": [],
+        "job_board_links": [],
+    }
+
+
+def _get_primary_phone(phone_numbers: list) -> str | None:
+    """Return the first extracted phone number, if available."""
+
+    for item in phone_numbers:
+        if isinstance(item, dict) and item.get("phone"):
+            return item["phone"]
+
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+
+    return None
+
+
+def _get_primary_industry(industry_data: Any) -> str | None:
+    """Read the primary industry from the detector result."""
+
+    if not isinstance(industry_data, dict):
+        return None
+
+    return (
+        industry_data.get("primary_industry")
+        or industry_data.get("industry")
+    )
 
 
 async def process_single_domain(
@@ -36,42 +87,117 @@ async def process_single_domain(
                 config,
             )
 
-            pages = domain_data.get("pages", [])
-            hostname = domain_data.get("domain")
+            pages = domain_data.get("pages", []) or []
+            hostname = domain_data.get("domain") or domain
 
             # 2. Extract emails
             emails = []
 
-            if config.extract_emails:
-                emails = extract_from_pages(pages)
+            if getattr(config, "extract_emails", True):
+                try:
+                    emails = extract_emails_from_pages(pages) or []
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Email extraction failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
 
-            # 3. Detect technologies
-            technology = detect_from_pages(
-                pages
-            ) if config.detect_technologies else {
-                "technologies": [],
-                "technology_count": 0,
-                "categories": {},
-                "detection_status": "disabled",
-            }
+            # 3. Extract phone numbers
+            phone_numbers = []
 
-            # 4. Detect hiring signals
-            hiring = detect_hiring_from_pages(
-                pages
-            ) if config.detect_hiring_signals else {
-                "hiring_detected": False,
-                "hiring_score": 0,
-                "hiring_status": "disabled",
+            if getattr(config, "extract_phones", True):
+                try:
+                    phone_numbers = extract_phones_from_pages(
+                        pages,
+                        max_results=200,
+                    ) or []
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Phone extraction failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
+
+            # 4. Detect industry
+            industry_data = {
+                "primary_industry": None,
+                "confidence": 0,
+                "candidates": [],
                 "matched_keywords": [],
-                "career_links": [],
-                "job_board_links": [],
+                "detection_status": "not_detected",
             }
 
-            # 5. Validate MX records
             try:
-                mx_validation = await validate_mx(
-                    hostname
+                industry_data = detect_industry_from_pages(
+                    pages
+                ) or industry_data
+            except Exception as exc:
+                Actor.log.warning(
+                    "Industry detection failed for %s: %s",
+                    domain,
+                    str(exc),
                 )
+
+            # 5. Extract business location
+            locations = []
+            location_data = {}
+
+            try:
+                locations = extract_locations_from_pages(
+                    pages,
+                    max_results=50,
+                ) or []
+
+                location_data = build_location_summary(
+                    locations
+                ) or {}
+
+            except Exception as exc:
+                Actor.log.warning(
+                    "Location extraction failed for %s: %s",
+                    domain,
+                    str(exc),
+                )
+
+            # 6. Detect technologies
+            if getattr(config, "detect_technologies", True):
+                try:
+                    technology = detect_technology_from_pages(
+                        pages
+                    ) or _disabled_technology_result()
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Technology detection failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
+                    technology = _disabled_technology_result()
+                    technology["detection_status"] = "error"
+            else:
+                technology = _disabled_technology_result()
+
+            # 7. Detect hiring signals
+            if getattr(config, "detect_hiring_signals", True):
+                try:
+                    hiring = detect_hiring_from_pages(
+                        pages
+                    ) or _disabled_hiring_result()
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Hiring detection failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
+                    hiring = _disabled_hiring_result()
+                    hiring["hiring_status"] = "error"
+            else:
+                hiring = _disabled_hiring_result()
+
+            # 8. Validate MX records
+            try:
+                mx_validation = await validate_mx(hostname)
+
             except Exception as exc:
                 Actor.log.warning(
                     "MX validation failed for %s: %s",
@@ -87,53 +213,82 @@ async def process_single_domain(
                     "error": str(exc),
                 }
 
-            # 6. Website information
+            # 9. Website information
             homepage = pages[0] if pages else {}
 
+            website_url = domain_data.get(
+                "website_url",
+                domain,
+            )
+
             website = {
-                "url": domain_data.get(
-                    "website_url", domain
-                ),
+                "url": website_url,
                 "reachable": bool(homepage.get("html")),
                 "status_code": homepage.get("status_code"),
                 "pages_analyzed": len(pages),
                 "pages": pages,
             }
 
-            # 7. Basic business information
+            # 10. Generate business description
+            existing_description = (
+                homepage.get("description")
+                or homepage.get("text", "")[:500]
+                or None
+            )
+
+            business_description = existing_description
+
+            if getattr(config, "generate_business_summary", True):
+                try:
+                    generated_summary = generate_business_summary(
+                        pages,
+                        existing_description=existing_description,
+                        max_length=500,
+                    )
+
+                    if generated_summary:
+                        business_description = generated_summary
+
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Business summary generation failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
+
+            # 11. Basic business information
             business = {
                 "name": homepage.get("title") or hostname,
                 "domain": hostname,
-                "website": domain_data.get(
-                    "website_url", domain
-                ),
-                "description": (
-                    homepage.get("description")
-                    or homepage.get("text", "")[:500]
-                    or None
-                ),
-                "industry": None,
-                "location": None,
-                "phone": None,
+                "website": website_url,
+                "description": business_description,
+                "industry": _get_primary_industry(industry_data),
+                "industry_details": industry_data,
+                "location": location_data,
+                "phone": _get_primary_phone(phone_numbers),
+                "phone_numbers": phone_numbers,
             }
 
-            # 8. Unified result data
+            # 12. Unified result data
             result_data = {
                 "domain": hostname,
-                "status": (
-                    "completed" if pages else "failed"
-                ),
+                "status": "completed" if pages else "failed",
                 "business": business,
                 "website": website,
                 "emails": emails,
+                "phone_numbers": phone_numbers,
+                "industry": industry_data,
+                "locations": locations,
+                "location": location_data,
+                "business_summary": business_description,
                 "mx_validation": mx_validation,
                 "technology": technology,
                 "hiring": hiring,
-                "errors": domain_data.get("errors", []),
+                "errors": domain_data.get("errors", []) or [],
             }
 
-            # 9. Calculate intent score
-            if config.calculate_intent_score:
+            # 13. Calculate intent score
+            if getattr(config, "calculate_intent_score", True):
                 intent_data = dict(result_data)
 
                 # Intent scorer expects email strings
@@ -144,25 +299,44 @@ async def process_single_domain(
                     and item.get("email")
                 ]
 
-                result_data["intent"] = calculate_intent(
-                    intent_data
-                )
+                try:
+                    result_data["intent"] = calculate_intent(
+                        intent_data
+                    )
+                except Exception as exc:
+                    Actor.log.warning(
+                        "Intent scoring failed for %s: %s",
+                        domain,
+                        str(exc),
+                    )
 
-            # 10. Build final JSON
+                    result_data["intent"] = {
+                        "score": 0,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+
+            # 14. Build final JSON
             result = build_result(
                 domain,
                 result_data,
                 config,
             )
 
-            # 11. Save to Apify Dataset
+            # 15. Save to Apify Dataset
             await Actor.push_data(result)
 
             Actor.log.info(
-                "Completed: %s | Pages: %d | Emails: %d | Technologies: %d | Hiring: %s",
+                (
+                    "Completed: %s | Pages: %d | Emails: %d | "
+                    "Phones: %d | Industry: %s | Technologies: %d | "
+                    "Hiring: %s"
+                ),
                 domain,
                 len(pages),
                 len(emails),
+                len(phone_numbers),
+                business.get("industry") or "Not detected",
                 technology.get("technology_count", 0),
                 hiring.get("hiring_detected", False),
             )
@@ -203,7 +377,7 @@ async def run_application() -> None:
     )
 
     semaphore = asyncio.Semaphore(
-        config.max_concurrency
+        max(1, getattr(config, "max_concurrency", 5))
     )
 
     tasks = [
