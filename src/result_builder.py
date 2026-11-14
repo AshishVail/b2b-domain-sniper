@@ -1,4 +1,3 @@
-
 """
 B2B Domain Sniper
 Final Business Intelligence Result Builder.
@@ -12,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-OUTPUT_VERSION = "1.1"
+OUTPUT_VERSION = "1.2"
 
 
 def utc_now() -> str:
@@ -27,20 +26,85 @@ def safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def safe_string(value: Any) -> str | None:
+    """Return a clean non-empty string."""
+
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    return value or None
+
+
 def build_business_info(data: dict) -> dict:
-    """Build business identity."""
+    """Build business identity and profile information."""
 
     business = safe_dict(data.get("business"))
 
+    industry_details = safe_dict(
+        business.get("industry_details")
+        or data.get("industry")
+    )
+
+    location = (
+        business.get("location")
+        or data.get("location")
+    )
+
+    phone_numbers = (
+        business.get("phone_numbers")
+        or data.get("phone_numbers")
+    )
+
+    phone = (
+        business.get("phone")
+        or _get_primary_phone(phone_numbers)
+    )
+
+    description = (
+        business.get("description")
+        or data.get("business_summary")
+    )
+
     return {
-        "name": business.get("name"),
-        "domain": business.get("domain") or data.get("domain"),
-        "website": business.get("website") or data.get("website_url"),
-        "description": business.get("description"),
-        "industry": business.get("industry"),
-        "location": business.get("location"),
-        "phone": business.get("phone"),
+        "name": safe_string(business.get("name")),
+        "domain": (
+            safe_string(business.get("domain"))
+            or safe_string(data.get("domain"))
+        ),
+        "website": (
+            safe_string(business.get("website"))
+            or safe_string(data.get("website_url"))
+        ),
+        "description": safe_string(description),
+        "industry": (
+            safe_string(business.get("industry"))
+            or safe_string(industry_details.get("primary_industry"))
+        ),
+        "location": location,
+        "phone": safe_string(phone),
     }
+
+
+def _get_primary_phone(phone_numbers: Any) -> str | None:
+    """Get the first usable phone number."""
+
+    for item in safe_list(phone_numbers):
+
+        if isinstance(item, str):
+            value = safe_string(item)
+
+        elif isinstance(item, dict):
+            value = safe_string(item.get("phone"))
+
+        else:
+            value = None
+
+        if value:
+            return value
+
+    return None
 
 
 def build_email_section(data: dict) -> dict:
@@ -84,12 +148,181 @@ def build_email_section(data: dict) -> dict:
     }
 
 
+def build_phone_section(data: dict) -> dict:
+    """Build phone number intelligence."""
+
+    phone_numbers = (
+        data.get("phone_numbers")
+        or safe_dict(data.get("business")).get("phone_numbers")
+    )
+
+    if not phone_numbers:
+        primary_phone = safe_dict(
+            data.get("business")
+        ).get("phone")
+
+        phone_numbers = (
+            [{"phone": primary_phone}]
+            if primary_phone
+            else []
+        )
+
+    unique_numbers = []
+    seen = set()
+
+    for item in safe_list(phone_numbers):
+
+        if isinstance(item, str):
+            details = {
+                "phone": item,
+            }
+
+        elif isinstance(item, dict):
+            details = dict(item)
+
+        else:
+            continue
+
+        phone = safe_string(details.get("phone"))
+
+        if not phone:
+            continue
+
+        normalized = (
+            safe_string(details.get("normalized_digits"))
+            or "".join(
+                character
+                for character in phone
+                if character.isdigit()
+            )
+        )
+
+        deduplication_key = normalized or phone.lower()
+
+        if deduplication_key in seen:
+            continue
+
+        seen.add(deduplication_key)
+
+        details["phone"] = phone
+        details["normalized_digits"] = normalized
+
+        unique_numbers.append(details)
+
+    return {
+        "total": len(unique_numbers),
+        "primary_phone": (
+            unique_numbers[0]["phone"]
+            if unique_numbers
+            else None
+        ),
+        "results": unique_numbers,
+        "detection_status": (
+            "completed" if unique_numbers else "not_detected"
+        ),
+    }
+
+
+def build_industry_section(data: dict) -> dict:
+    """Build industry classification intelligence."""
+
+    business = safe_dict(data.get("business"))
+
+    industry = safe_dict(
+        data.get("industry")
+        or business.get("industry_details")
+    )
+
+    primary_industry = (
+        industry.get("primary_industry")
+        or industry.get("industry")
+        or business.get("industry")
+    )
+
+    return {
+        "primary_industry": safe_string(primary_industry),
+        "confidence": industry.get("confidence", 0),
+        "candidates": safe_list(
+            industry.get("candidates")
+        ),
+        "matched_keywords": safe_list(
+            industry.get("matched_keywords")
+        ),
+        "detection_status": industry.get(
+            "detection_status",
+            "not_detected" if not primary_industry else "completed",
+        ),
+    }
+
+
+def build_location_section(data: dict) -> dict:
+    """Build business location intelligence."""
+
+    business = safe_dict(data.get("business"))
+
+    location_summary = (
+        data.get("location")
+        or business.get("location")
+    )
+
+    locations = (
+        data.get("locations")
+        or safe_dict(location_summary).get("locations")
+    )
+
+    summary = safe_dict(location_summary)
+
+    # Support a location object returned directly by the extractor.
+    if not summary and isinstance(location_summary, str):
+        summary = {
+            "primary_location": location_summary,
+        }
+
+    return {
+        "primary_location": (
+            summary.get("primary_location")
+            or summary.get("location")
+            or summary.get("formatted_address")
+        ),
+        "locations": safe_list(locations),
+        "total": len(safe_list(locations)),
+        "country": summary.get("country"),
+        "city": summary.get("city"),
+        "region": summary.get("region"),
+        "postal_code": summary.get("postal_code"),
+        "detection_status": summary.get(
+            "detection_status",
+            "completed" if locations or summary else "not_detected",
+        ),
+    }
+
+
+def build_business_summary_section(data: dict) -> dict:
+    """Build generated business summary information."""
+
+    business = safe_dict(data.get("business"))
+
+    summary = (
+        data.get("business_summary")
+        or business.get("description")
+    )
+
+    return {
+        "summary": safe_string(summary),
+        "source": (
+            "generated_or_extracted"
+            if summary
+            else "not_available"
+        ),
+    }
+
+
 def build_website_section(data: dict) -> dict:
     """Build website crawl information."""
 
     website = safe_dict(data.get("website"))
 
-    # Support both nested and original crawler output
+    # Support both nested and original crawler output.
     pages = safe_list(
         website.get("pages", data.get("pages"))
     )
@@ -208,7 +441,7 @@ def build_intent_section(data: dict) -> dict:
     return {
         "intent_score": intent.get(
             "intent_score",
-            0,
+            intent.get("score", 0),
         ),
         "intent_level": intent.get(
             "intent_level",
@@ -274,8 +507,6 @@ def build_result(
         "completed",
     )
 
-    # Partial page errors do not automatically mean
-    # the complete domain scan failed.
     success = status == "completed"
 
     result = {
@@ -302,6 +533,8 @@ def build_result(
 
         "email_intelligence": build_email_section(data),
 
+        "phone_intelligence": build_phone_section(data),
+
         "mx_validation": build_mx_section(data),
 
         "technology_intelligence": (
@@ -313,6 +546,9 @@ def build_result(
         ),
 
         "business_intelligence": {
+            "industry": build_industry_section(data),
+            "location": build_location_section(data),
+            "summary": build_business_summary_section(data),
             "intent": build_intent_section(data),
         },
 
