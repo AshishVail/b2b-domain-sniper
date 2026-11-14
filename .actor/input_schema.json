@@ -35,6 +35,15 @@
       "minimum": 1,
       "maximum": 50
     },
+    "page_concurrency": {
+      "title": "Concurrent Pages Per Domain",
+      "type": "integer",
+      "description": "Maximum number of website pages fetched concurrently for each domain.",
+      "editor": "number",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
     "extract_emails": {
       "title": "Extract Business Emails",
       "type": "boolean",
